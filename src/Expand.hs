@@ -3,10 +3,7 @@
 module Main where
 
 import           Data.Aeson
-import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
-import qualified Data.ByteString as BS
-import qualified Data.ByteString.Char8 as C8
 import qualified Data.ByteString.Lazy.Char8 as L8
 import           Data.Text (Text)
 import qualified Data.Text as T
@@ -23,7 +20,7 @@ main = do
 
     let y = case x of
                 Left _  -> error "Couldn't decode"
-                Right v -> visit (\x -> x == "bar") interpret v
+                Right v -> visit (== "bar") interpret v
 
     L8.putStrLn $ encode y
 
@@ -37,7 +34,7 @@ visitKeyVal p f k (String v) | p k =
     case f v of
         Left e  -> error $ unlines ["Error handling key-val pair:", show (k, v), e]
         Right r -> String r
-visitKeyVal p f k v = v
+visitKeyVal _ _ _ v = v
 
 interpret :: Text -> Either String Text
 interpret t =

@@ -38,6 +38,6 @@ executable expand
   main-is:             Expand.hs
   ghc-options:         -Wall -O3
   other-modules:       CertificateParser
-  build-depends:       aeson, base, base64 <= 0.4.2.2, bytestring, megaparsec, parser-combinators, stm, typed-process, text, vector
+  build-depends:       aeson, base, base64, bytestring, megaparsec, parser-combinators, stm, typed-process, text, vector
   hs-source-dirs:      src
   default-language:    Haskell2010

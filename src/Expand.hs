@@ -1,46 +1,79 @@
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE LambdaCase, OverloadedStrings #-}
 
 module Main where
 
+import           Control.Concurrent.STM (atomically)
 import           Data.Aeson
 import qualified Data.Aeson.KeyMap as KM
+import qualified Data.ByteString.Char8 as C8
 import qualified Data.ByteString.Lazy.Char8 as L8
+import           Data.Maybe (fromMaybe)
 import           Data.Text (Text)
 import qualified Data.Text as T
 import           Data.Text.Encoding
 import qualified Data.ByteString.Base64 as B64
 import qualified Data.Vector as V
+import           System.IO (hClose)
+import           System.Process.Typed
 
 main :: IO ()
 main = do
 
     content <- L8.getContents
+    let Right root = eitherDecode content :: Either String Value
+    L8.putStrLn . encode $ root
+    L8.putStrLn . encode =<< walk operation root
 
-    let x = eitherDecode content :: Either String Value
+operation :: Maybe Key -> Text -> IO (Maybe Value)
+operation = steps [unpackCert, decodeDataObj]
 
-    let y = case x of
-                Left _  -> error "Couldn't decode"
-                Right v -> visit (== "bar") interpret v
+-- Modifications
+steps :: [a -> b -> IO (Maybe c)] -> a -> b -> IO (Maybe c)
+steps     []  _ _ = pure Nothing
+steps (f:fs) mk t =
+    f mk t >>= \case
+        Just t' -> pure $ Just t'
+        Nothing -> steps fs mk t
 
-    L8.putStrLn $ encode y
+decodeDataObj :: Maybe Key -> Text -> IO (Maybe Value)
+decodeDataObj (Just "data") t =
+    case eitherDecode (L8.fromStrict $ encodeUtf8 t) of
+        Left l    -> error l
+        Right val -> Just <$> walk operation val
+decodeDataObj _ _ = pure Nothing
 
-visit :: (Key -> Bool) -> (Text -> Either String Text) -> Value -> Value
-visit p f (Array xs)  = Array (V.map (visit p f) xs)
-visit p f (Object km) = Object (KM.mapWithKey (visitKeyVal p f) km)
-visit _ _ v           = v
+unpackCert :: Maybe Key -> Text -> IO (Maybe Value)
+unpackCert (Just "certificateBundle") cert = do
+    let procConfig = setStdin createPipe
+                   . setStdout byteStringOutput
+                   $ shell "openssl x509 -inform PEM -in /dev/stdin -noout -text" 
+    decodedCert <- withProcessWait_ procConfig $ \p -> do
+                       C8.hPutStr (getStdin p) (b64Decode' cert)
+                       hClose     (getStdin p)
+                       atomically (getStdout p)
+    case decodeUtf8' (L8.toStrict decodedCert) of
+        Left l -> error $ unlines ["Could not utf8 encode cert output", show l]
+        Right t -> pure . Just . String $ t
+unpackCert                          _ _ = pure Nothing
 
-visitKeyVal :: (Key -> Bool) -> (Text -> Either String Text) -> Key -> Value -> Value
-visitKeyVal p f k (String v) | p k =
-    case f v of
-        Left e  -> error $ unlines ["Error handling key-val pair:", show (k, v), e]
-        Right r -> String r
-visitKeyVal _ _ _ v = v
-
-interpret :: Text -> Either String Text
-interpret t =
-
+b64Decode' :: Text -> C8.ByteString
+b64Decode' t =
     case B64.decodeBase64Untyped (encodeUtf8 t) of
-        Right unb64 -> case decodeUtf8' unb64 of
-                           Left {} -> Left "Base64-decoded string, but could not reencode into utf8"
-                           Right utf8 -> Right utf8
-        Left l -> Left $ T.unpack l
+        Left l -> error $ unlines ["Could not base64 decode", T.unpack l]
+        Right unb64 -> unb64
+    
+
+-- Traversals
+
+walk :: (Maybe Key -> Text -> IO (Maybe Value)) -> Value -> IO Value
+walk f v@(String t)  = fromMaybe v <$> f Nothing t
+walk f   (Array xs)  = Array  <$> V.mapM (walk f) xs
+walk f   (Object km) = Object <$> walkObj f km
+walk _ v             = pure v
+
+walkObj :: (Maybe Key -> Text -> IO (Maybe Value)) -> Object -> IO Object
+walkObj f = KM.traverseWithKey (walkKeyVal f)
+
+walkKeyVal :: (Maybe Key -> Text -> IO (Maybe Value)) -> Key -> Value -> IO Value
+walkKeyVal f k v@(String t) = fromMaybe v <$> f (Just k) t
+walkKeyVal f _ v            = walk f v

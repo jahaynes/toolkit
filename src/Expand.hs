@@ -2,6 +2,8 @@
 
 module Main where
 
+import CertificateParser
+
 import           Control.Concurrent.STM (atomically)
 import           Data.Aeson
 import qualified Data.Aeson.KeyMap as KM
@@ -21,7 +23,7 @@ main = do
 
     content <- L8.getContents
     let Right root = eitherDecode content :: Either String Value
-    L8.putStrLn . encode $ root
+    -- L8.putStrLn . encode $ root
     L8.putStrLn . encode =<< walk operation root
 
 operation :: Maybe Key -> Text -> IO (Maybe Value)
@@ -53,15 +55,17 @@ unpackCert (Just "certificateBundle") cert = do
                        atomically (getStdout p)
     case decodeUtf8' (L8.toStrict decodedCert) of
         Left l -> error $ unlines ["Could not utf8 encode cert output", show l]
-        Right t -> pure . Just . String $ t
+        Right t -> do
+
+            pure . Just $ (parseCertificate t)
+
 unpackCert                          _ _ = pure Nothing
 
 b64Decode' :: Text -> C8.ByteString
 b64Decode' t =
-    case B64.decodeBase64Untyped (encodeUtf8 t) of
-        Left l -> error $ unlines ["Could not base64 decode", T.unpack l]
+    case B64.decodeBase64 (encodeUtf8 t) of
+        Left l      -> error $ unlines ["Could not base64 decode", T.unpack l]
         Right unb64 -> unb64
-    
 
 -- Traversals
 
